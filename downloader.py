@@ -19,6 +19,7 @@ from src.config import KB
 from src.crawlers.crawler_utils import (
     extract_all_album_item_pages,
     get_download_info,
+    get_item_filename,
     has_cached_item_pages,
 )
 from src.downloaders.album_downloader import AlbumDownloader, MediaDownloader
@@ -54,6 +55,75 @@ if TYPE_CHECKING:
     from argparse import Namespace
 
     from src.managers.live_manager import LiveManager
+
+
+async def select_album_items(item_pages: list[str]) -> list[str] | None:
+    """Prompt the user to select which files in an album should be downloaded.
+
+    Returns the selected item-page URLs, or None when selection is cancelled.
+    """
+    if not item_pages:
+        print("This album contains no items.")
+        return []
+
+    print("\nLoading album filenames for selection...")
+    entries: list[tuple[str, str]] = []
+    for index, item_page in enumerate(item_pages, start=1):
+        soup = await fetch_page(item_page)
+        try:
+            filename = get_item_filename(soup) if soup is not None else ""
+        except (AttributeError, TypeError, ValueError):
+            filename = ""
+        if not filename:
+            filename = item_page.rstrip("/").rsplit("/", 1)[-1] or item_page
+        entries.append((item_page, filename))
+        print(f"  {index:>3}. {filename}")
+
+    print(
+        "\nSelect files by number (e.g. 1,3,5 or 2-4), "
+        "'A' for all, or 'Q' to cancel."
+    )
+    while True:
+        try:
+            choice = input("Files to download: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nSelection cancelled.")
+            return None
+
+        if choice.upper() == "Q":
+            print("Selection cancelled.")
+            return None
+        if choice.upper() in {"A", "ALL"}:
+            return [page for page, _ in entries]
+        if not choice:
+            print("No files selected.")
+            return []
+
+        selected_indices: set[int] = set()
+        try:
+            for token in choice.replace(",", " ").split():
+                if "-" in token:
+                    start_text, end_text = token.split("-", 1)
+                    start, end = int(start_text), int(end_text)
+                    if start > end:
+                        start, end = end, start
+                    if start < 1 or end > len(entries):
+                        raise ValueError
+                    selected_indices.update(range(start, end + 1))
+                else:
+                    index = int(token)
+                    if index < 1 or index > len(entries):
+                        raise ValueError
+                    selected_indices.add(index)
+        except ValueError:
+            print(
+                f"Invalid selection. Enter numbers from 1 to {len(entries)}, A, or Q.",
+            )
+            continue
+
+        selected = [entries[index - 1][0] for index in sorted(selected_indices)]
+        print(f"Selected {len(selected)} of {len(entries)} file(s).")
+        return selected
 
 
 async def resolve_album_items(
@@ -128,8 +198,18 @@ async def handle_download_process(
             session_info,
             live_manager,
         )
+
+        # Interactive selection is only needed for album URLs, not single files.
+        selected_pages = await select_album_items(item_pages)
+        if not selected_pages:
+            return False
+
         album_info = AlbumInfo(
-            album_id=identifier, item_pages=item_pages, item_dates=item_dates,
+            album_id=identifier,
+            item_pages=item_pages,
+            item_dates=item_dates,
+            cached_items=cached_items,
+            selected_item_pages=selected_pages,
         )
         album_downloader = AlbumDownloader(
             session_info=session_info,
