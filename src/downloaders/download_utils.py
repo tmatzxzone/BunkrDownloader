@@ -118,7 +118,7 @@ def detect_range_support(
 ) -> tuple[bool, int]:
     """Send a HEAD request to detect Range support and retrieve the file size."""
     try:
-        response = requests.head(url, headers=headers, timeout=10)
+        response = requests.head(url, headers=headers, timeout=(10, 30))
         response.raise_for_status()
         supports_range = response.headers.get("Accept-Ranges", "").lower() == "bytes"
         content_length = int(response.headers.get("Content-Length", -1))
@@ -255,7 +255,7 @@ def _attempt_chunk_once(
             url,
             headers=chunk_headers,
             stream=True,
-            timeout=30,
+            timeout=(15, 120),
         ) as response:
             response.raise_for_status()
             with path.open("wb") as file:
