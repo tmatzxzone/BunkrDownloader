@@ -409,12 +409,13 @@ def merge_chunks(chunk_paths: list[Path], final_path: Path) -> None:
     path, which later runs would skip as already downloaded.
     """
     temp_path = append_suffix(final_path, ".temp")
+
     with temp_path.open("wb") as destination_file:
         for chunk_path in chunk_paths:
             with chunk_path.open("rb") as chunk_file:
                 shutil.copyfileobj(chunk_file, destination_file)
 
-     temp_path.replace(final_path)
+    temp_path.replace(final_path)
 
 
 def cleanup(chunk_paths: list[Path], base_path: Path) -> None:
