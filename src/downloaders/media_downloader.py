@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from src.managers.live_manager import LiveManager
 
 _BACKOFF_FACTOR = 1.5
-_SINGLE_CONNECTION_TIMEOUT = 5
+_SINGLE_CONNECTION_TIMEOUT = (15, 120)  # (connect timeout, read timeout) in seconds
 
 
 class MediaDownloader:
@@ -101,16 +101,18 @@ class MediaDownloader:
                     if not chunked_failed:
                         return False
 
-                    # Persistent failure after CHUNK_MAX_RETRIES attempts.
-                    if not self._retry_with_backoff(
-                        attempt,
-                        event="Retrying chunked download",
-                    ):
-                        break
+                    # Chunked downloads can be unreliable on some CDN hosts. Fall back
+                    # to a normal stream instead of repeatedly retrying the same range plan.
+                    self.live_manager.update_log(
+                        event="Chunked download failed",
+                        details=(
+                            f"Falling back to a single connection for "
+                            f"{self.download_info.filename}."
+                        ),
+                    )
 
-                    continue
-
-                # Fallback: single-connection streaming download
+                # Fallback: single-connection streaming download. Use a generous read
+                # timeout because Bunkr CDN connections can pause for more than 5 seconds.
                 response = requests.get(
                     self.download_info.download_link,
                     stream=True,
@@ -267,27 +269,38 @@ class MediaDownloader:
         attempt: int,
     ) -> bool:
         """Handle exceptions during the request and manages retries."""
-        is_server_down = req_err.response is None or req_err.response.status_code in (
-            HTTPStatus.SERVER_DOWN,
-            HTTPStatus.SERVICE_UNAVAILABLE,
-        )
+        response = req_err.response
 
-        # Mark the subdomain as offline and exit the loop
-        if is_server_down:
+        # A connection error or timeout without an HTTP response does not prove that
+        # the whole CDN subdomain is offline. Retry this file instead of marking the
+        # shared subdomain offline, which would incorrectly skip the rest of an album.
+        if response is None:
+            return self._retry_with_backoff(
+                attempt,
+                event="Retrying connection after a network error",
+            )
+
+        # HTTP 521 explicitly indicates that the origin is unavailable. Treat 503 as
+        # transient because one overloaded request should not disable every other file
+        # sharing the same CDN host.
+        if response.status_code == HTTPStatus.SERVER_DOWN:
             marked_subdomain = mark_subdomain_as_offline(
                 self.session_info.bunkr_status,
                 self.download_info.download_link,
             )
             self.live_manager.update_log(
-                event="No response",
-                details=f"Subdomain '{marked_subdomain}' has been marked as offline.",
+                event="Server unavailable",
+                details=f"Subdomain '{marked_subdomain}' returned HTTP 521 and was marked offline.",
             )
             return False
 
-        if req_err.response.status_code == HTTPStatus.TOO_MANY_REQUESTS:
+        if response.status_code in (
+            HTTPStatus.SERVICE_UNAVAILABLE,
+            HTTPStatus.TOO_MANY_REQUESTS,
+        ):
             return self._retry_with_backoff(attempt, event="Retrying download")
 
-        if req_err.response.status_code == HTTPStatus.BAD_GATEWAY:
+        if response.status_code == HTTPStatus.BAD_GATEWAY:
             self.live_manager.update_log(
                 event="Server error",
                 details=f"Bad gateway for {self.download_info.filename}.",
