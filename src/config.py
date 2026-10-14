@@ -82,9 +82,9 @@ LOG_MANAGER_CONFIG = {
 # Download Settings
 # ============================
 MAX_FILENAME_LEN = 120   # The maximum length for a file name.
-MAX_WORKERS = 3          # The maximum number of threads for concurrent downloads.
+MAX_WORKERS = 2          # Limit concurrent album files to reduce CDN timeouts.
 MAX_RETRIES = 5          # The maximum number of retries for downloading a single media.
-DEFAULT_CONNECTIONS = 4  # Default number of parallel connections for chunked downloads.
+DEFAULT_CONNECTIONS = 1  # Default to streaming; use --connections > 1 to enable chunking.
 CHUNK_MAX_RETRIES = 4    # Max retry attempts for a single failed chunk.
 CHUNK_BASE_DELAY = 1.5   # Base delay (seconds) for chunk retry exponential backoff.
 
